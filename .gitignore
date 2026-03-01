@@ -1,0 +1,43 @@
+cat > .gitignore << 'EOF'
+
+._*
+Thumbs.db
+
+# environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Mac
+.DS_Store
+
+# Local data & models
+chroma_db/
+*.gguf
+models/
+*.bin
+*.safetensors
+
+# Large result files (keep reports, not raw data dumps)
+results/*.parquet
+data/raw/
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Langfuse local
+langfuse/postgres/
+langfuse/clickhouse/
+
+# IDE
+.vscode/
+.idea/
+EOF
