@@ -3,6 +3,9 @@ cat > .gitignore << 'EOF'
 ._*
 Thumbs.db
 
+# internal tracking files
+PROGRESS.md
+
 # environment
 .env
 .env.*
