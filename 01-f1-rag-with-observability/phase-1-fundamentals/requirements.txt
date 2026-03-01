@@ -1,0 +1,24 @@
+# Phase 1 — Fundamentals
+# Pin minor versions for reproducibility, allow patch updates
+
+# HTTP client — httpx preferred over requests: supports both sync and async,
+# which matters when we add FastAPI in later phases
+httpx>=0.27,<0.28
+
+# Data validation — Pydantic v2 for all cross-module data structures
+pydantic>=2.7,<3.0
+
+# Structured logging — JSON output, not print statements
+structlog>=24.2,<25.0
+
+# Embeddings — local, M1-friendly, never use OpenAI embeddings
+sentence-transformers>=3.0,<4.0
+
+# Vector store — local, no server needed
+chromadb>=0.5,<0.6
+
+# LLM — Groq free tier for answer generation
+groq>=0.9,<1.0
+
+# Env var loading
+python-dotenv>=1.0,<2.0

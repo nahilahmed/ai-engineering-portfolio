@@ -17,19 +17,21 @@ The projects are intentionally sequenced — each one builds on the previous.
 ## How to work with me (Claude Code)
 This portfolio is built for learning, not just output. Follow these rules in every session:
 
-**Before generating any code:**
-- Ask me what I already understand about the component we're building
-- Explain the "why" behind architectural decisions, not just the "how"
-- If I'm about to make a trade-off, surface it explicitly so I can decide
+**The coding workflow — follow this order every time:**
+1. **Claude explains** — what the next piece does and why, the reasoning behind each decision. Keep it concise.
+2. **User says go or pushes back** — the user must understand and agree before anything is written.
+3. **Claude writes it** — one logical unit at a time (one model, one method, one class).
+4. **User reviews** — reads it in the editor, asks questions, challenges decisions.
+5. **Repeat** until the component is complete.
 
-**When generating code:**
-- Scaffold structure and boilerplate — don't write the entire logic unprompted
-- Add comments explaining non-obvious decisions
-- Keep functions small and single-purpose
-- If something has multiple valid approaches, show me 2 options with trade-offs
+This is a teaching workflow. The user is a data engineer building software engineering depth.
+Every decision must be explained before it is made, not after.
 
 **Never:**
-- Generate an entire phase in one shot without explanation
+- Write multiple components in one shot without stopping for questions
+- Explain after the fact — explain before writing, get buy-in first
+- Dump walls of text — one concept at a time, then pause
+- Skip the "why" — the user needs to be able to defend every line in an interview
 - Use a paid API where a free alternative exists (see Budget section)
 - Add dependencies without explaining what they do and why they're needed
 - Skip error handling or logging — these are portfolio projects, not scripts
@@ -37,7 +39,7 @@ This portfolio is built for learning, not just output. Follow these rules in eve
 **Always:**
 - Default to Groq for LLM calls (free tier)
 - Use sentence-transformers locally for embeddings (never OpenAI embeddings)
-- Remind me to fill in LEARNINGS.md after each phase completes
+- At the end of each session, add learnings to the active project's `LEARNINGS.md` (e.g. `01-f1-rag-with-observability/LEARNINGS.md`) — what was built, decisions made and why, what broke and how it was fixed
 - Check PROGRESS.md to understand what's already been built
 
 ---
