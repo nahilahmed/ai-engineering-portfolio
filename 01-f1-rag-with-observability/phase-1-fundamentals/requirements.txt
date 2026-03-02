@@ -20,5 +20,8 @@ chromadb>=0.5,<0.6
 # LLM — Groq free tier for answer generation
 groq>=0.9,<1.0
 
+# HTML parsing — strip tags from FIA/F1 pages to get clean text
+beautifulsoup4>=4.12,<5.0
+
 # Env var loading
 python-dotenv>=1.0,<2.0
