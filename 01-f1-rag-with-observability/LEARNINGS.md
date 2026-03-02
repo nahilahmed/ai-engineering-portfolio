@@ -88,3 +88,62 @@ Initial `_extract_text` fell back to `<body>` for all pages. FIA doesn't use sem
 ### Questions worth thinking about before next session
 - The embedder needs to load `sentence-transformers` — first heavyweight model load. Install now or wait?
 - ChromaDB setup: what metadata fields matter most for filtering at query time?
+
+---
+
+## Session 3 — 2026-03-02 | Phase 1: Embedder + VectorStore + Retriever
+
+### What was built
+- `phase-1-fundamentals/embeddings/embedder.py` — `EmbeddedChunk` model + `Embedder` class
+- `phase-1-fundamentals/retrieval/vector_store.py` — `VectorStore` class (ChromaDB wrapper)
+- `phase-1-fundamentals/retrieval/retriever.py` — `Retriever` class (text query → top-k chunks)
+- `phase-1-fundamentals/rag_test.ipynb` — interactive notebook for exploring the full pipeline
+
+### Decisions made and why
+
+**`EmbeddedChunk` extends `Chunk` (not a flat duplicate)**
+Pydantic inheritance means `EmbeddedChunk` gets `chunk_id`, `text`, and `metadata` from `Chunk` for free. Only the new field (`embedding: list[float]`) is declared. Avoids duplication and keeps the type contract clear — an `EmbeddedChunk` is always a valid `Chunk` plus a vector.
+
+**`chunk.model_dump()` for Pydantic inheritance construction**
+When building `EmbeddedChunk` from a `Chunk`, `**chunk.model_dump()` spreads all parent fields cleanly. Avoids manually threading `chunk_id=chunk.chunk_id, text=chunk.text, ...`. Safe because `model_dump()` returns only declared fields.
+
+**`convert_to_numpy=True` + `.tolist()` on vectors**
+`sentence-transformers` returns numpy arrays by default. Pydantic's `list[float]` validator rejects numpy arrays. `.tolist()` converts each row to a plain Python list — zero cost, required for Pydantic compatibility.
+
+**Batch encoding — one `model.encode()` call on all texts**
+Passing all chunk texts as a list lets `sentence-transformers` group them into batches of 32 internally and run matrix operations across the batch. Faster than calling `encode()` once per chunk. The model handles batching — our code just passes the full list.
+
+**Model loaded once at `__init__`, never per request**
+Loading `all-MiniLM-L6-v2` takes ~4s and ~300MB RAM. Loading it per call would be unusable in any pipeline. Instantiating `Embedder` once and reusing it is a hard requirement.
+
+**Single ChromaDB collection with metadata filtering**
+One collection (`f1_chunks`) for all unstructured F1 text. Source type, race, and year live in metadata. This allows filtering at query time (`where={"year": "2024"}`) without the operational overhead of managing multiple collections. Separate collections only justified if using different embedding models per source — not our case.
+
+**`hnsw:space: cosine`**
+ChromaDB defaults to L2 (Euclidean) distance. Cosine similarity is the correct metric for sentence-transformer embeddings — it measures angle between vectors (semantic direction) not absolute magnitude. Set explicitly so behaviour doesn't depend on ChromaDB's default changing.
+
+**`upsert` not `add` in VectorStore**
+`add` throws on duplicate `chunk_id`. `upsert` updates in place. Ingestion pipelines are often re-run (new data, bug fixes) — idempotency is a correctness requirement, not an optimisation.
+
+**Dependencies injected into `Retriever`**
+`Retriever.__init__` accepts `Embedder` and `VectorStore` rather than creating them internally. This keeps both as singletons in the pipeline — the same loaded model and open DB connection are shared across all retrieval calls. Creating them inside `Retriever` would cause re-loading on every instantiation.
+
+**Query wrapped in a minimal `Chunk` for embedding**
+`Embedder.embed()` expects `list[Chunk]`. For a query string, a placeholder `Chunk` is created with `chunk_id="query"` and empty metadata — only `.text` is used during embedding. The alternative (a separate `embed_text()` method) would duplicate the batch encoding logic.
+
+### What broke and how it was fixed
+
+**ChromaDB telemetry errors on startup**
+`Failed to send telemetry event: capture() takes 1 positional argument but 3 were given` — version mismatch between ChromaDB and its internal telemetry library. Harmless, doesn't affect reads/writes. Can be silenced with `ANONYMIZED_TELEMETRY=False` env var if needed.
+
+**`n_results` warning when corpus smaller than `top_k`**
+`Number of requested results 3 is greater than number of elements in index 2` — ChromaDB auto-adjusts silently. Not an issue in production with hundreds of chunks.
+
+### Observations from rag_test.ipynb
+- Cosine distances on a 3-chunk corpus are close together (0.46–0.59) because all chunks are F1 content — semantically similar to any F1 query. In a real corpus of hundreds of chunks across many topics, irrelevant chunks score 0.7–0.9+ and the relevant ones stand out clearly.
+- Ranking is correct — that's what matters, not absolute distance values.
+- The reranker (Phase 2) will sharpen separation further using cross-encoder comparison.
+
+### Questions worth thinking about before next session
+- Answer generator: how should citations be structured? chunk_id only, or source + chunk_index?
+- How many retrieved chunks should we pass to the LLM context? (top_k for generation vs retrieval may differ)
