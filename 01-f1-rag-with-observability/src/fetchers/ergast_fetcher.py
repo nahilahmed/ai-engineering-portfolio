@@ -106,6 +106,41 @@ class DriverStanding(BaseModel):
     constructor: Constructor   # the constructor at time of standing
 
 
+class QualifyingResult(BaseModel):
+    """One driver's qualifying result — position and Q1/Q2/Q3 times."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    number: str
+    position: str
+    driver: Driver
+    constructor: Constructor
+    Q1: str | None = None   # not all drivers reach Q2/Q3
+    Q2: str | None = None
+    Q3: str | None = None
+
+
+class QualifyingResponse(BaseModel):
+    """Wraps a qualifying session with its full results list."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    season: str
+    round: str
+    raceName: str
+    results: list[QualifyingResult]
+
+
+class ScheduleRace(BaseModel):
+    """One race entry from the season calendar — used for race name → round lookup."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    round: str       # "1", "2", ... as string per Ergast schema
+    raceName: str    # "Bahrain Grand Prix", "Monaco Grand Prix"
+    date: str        # race date, ISO format
+
+
 # ---------------------------------------------------------------------------
 # Fetcher
 # ---------------------------------------------------------------------------
@@ -277,6 +312,61 @@ class JolpicaFetcher:
             )
             for s in lists[0].get("DriverStandings", [])
         ]
+
+    def get_qualifying_results(self, year: int, round_number: int) -> QualifyingResponse | None:
+        """
+        Fetch qualifying results for one race weekend.
+
+        Args:
+            year: season year
+            round_number: 1-indexed round in the season calendar
+
+        Returns:
+            QualifyingResponse if data exists, None otherwise.
+            P1 in results = pole position.
+        """
+        data = self._get(f"/{year}/{round_number}/qualifying.json")
+        races = self._unwrap_races(data)
+
+        if not races:
+            self._log.warning("qualifying_not_found", year=year, round=round_number)
+            return None
+
+        race = races[0]
+        return QualifyingResponse(
+            season=race["season"],
+            round=race["round"],
+            raceName=race["raceName"],
+            results=[
+                QualifyingResult(
+                    number=r["number"],
+                    position=r["position"],
+                    driver=Driver.model_validate(r["Driver"]),
+                    constructor=Constructor.model_validate(r["Constructor"]),
+                    Q1=r.get("Q1"),
+                    Q2=r.get("Q2"),
+                    Q3=r.get("Q3"),
+                )
+                for r in race.get("QualifyingResults", [])
+            ],
+        )
+
+    def get_schedule(self, year: int) -> list[ScheduleRace]:
+        """
+        Fetch the full race calendar for a season.
+
+        Used internally to resolve a race name (e.g. "Singapore") to a round
+        number before calling get_race_results. Not exposed as a standalone tool.
+
+        Args:
+            year: season year
+
+        Returns:
+            List of ScheduleRace ordered by round number.
+        """
+        data = self._get(f"/{year}.json")
+        races = self._unwrap_races(data)
+        return [ScheduleRace.model_validate(r) for r in races]
 
     # ------------------------------------------------------------------
     # Context manager support

@@ -1,8 +1,9 @@
-# Phase 1 — Fundamentals
-# Pin minor versions for reproducibility, allow patch updates
+# Project 01 — F1 Strategy RAG + Observability
+# Single requirements file for all phases.
+# Install into the f1-rag conda env:
+#   conda run -n f1-rag pip install -r requirements.txt
 
-# HTTP client — httpx preferred over requests: supports both sync and async,
-# which matters when we add FastAPI in later phases
+# HTTP client — supports both sync and async (FastAPI phases later)
 httpx>=0.27,<0.28
 
 # Data validation — Pydantic v2 for all cross-module data structures
@@ -17,7 +18,7 @@ sentence-transformers>=3.0,<4.0
 # Vector store — local, no server needed
 chromadb>=0.5,<0.6
 
-# LLM — Groq free tier for answer generation
+# LLM — Groq free tier for all generation and classification
 groq>=0.9,<1.0
 
 # HTML parsing — strip tags from FIA/F1 pages to get clean text
@@ -25,3 +26,11 @@ beautifulsoup4>=4.12,<5.0
 
 # Env var loading
 python-dotenv>=1.0,<2.0
+
+# --- Phase 2 additions ---
+
+# BM25 keyword retrieval — lightweight, no server needed
+rank-bm25>=0.2,<0.3
+
+# Prompt versioning via configs/prompts.yaml
+pyyaml>=6.0,<7.0

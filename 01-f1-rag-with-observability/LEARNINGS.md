@@ -204,4 +204,77 @@ The LLM sometimes writes `[id1, id2, id3]` instead of `[id1] [id2] [id3]`. Fixed
 The excerpt in each `Citation` is the first 30 words of the chunk, which is often the race result header (e.g. `"DRIVERS 1 – George Russell..."`) rather than the specific sentence the LLM cited. The excerpt is there to help verify the citation, but it's not pointing at the right part of the chunk. Phase 2 should either increase excerpt length or extract the sentence immediately surrounding the citation in the answer text.
 
 **Corpus coverage gaps**
+166 chunks from 4 press conferences. [Phase 2 note below]
+
+---
+
+## Session 5 — 2026-03-03 | Phase 2: Production Quality
+
+### What was built
+- Codebase restructured: all source packages moved to a single `src/` at the project root via `git mv` (preserves history). One project-level `requirements.txt` and `.env.example`.
+- `src/retrieval/classifier.py` — `QueryRoute` enum, `ClassificationResult` Pydantic model, `QueryClassifier` (Groq, `temperature=0`, JSON mode)
+- `src/fetchers/ergast_fetcher.py` — added `ScheduleRace` model + `get_schedule()` + `QualifyingResult` + `QualifyingResponse` models + `get_qualifying_results()`
+- `src/retrieval/structured_retriever.py` — `StructuredRetriever` with 8-tool Groq function-calling loop (get_session, get_lap_times, get_pit_stops, get_stints, get_qualifying_results, get_race_results, get_driver_standings, get_constructor_standings)
+- `src/retrieval/vector_store.py` — added `get_all()` for BM25 index construction
+- `src/retrieval/bm25_retriever.py` — `BM25Okapi` index built once at startup; `retrieve()` returns chunks ordered by keyword relevance
+- `src/retrieval/hybrid_retriever.py` — `_reciprocal_rank_fusion()` merges semantic + BM25 ranked lists; `HybridRetriever` fetches `2*top_k` candidates from each before fusion
+- `src/retrieval/reranker.py` — `cross-encoder/ms-marco-MiniLM-L-6-v2` loaded once at init; `rerank()` adds `rerank_score` field to each chunk
+- `src/pipeline.py` — `RAGPipeline` singleton orchestrator; `PipelineResult` Pydantic model wrapping `GeneratedAnswer` + routing metadata
+- `cli.py` updated to use `RAGPipeline`, displaying route/confidence/reasoning
+
+### Decisions made and why
+
+**No LangChain / LangGraph for Phase 2**
+LangChain abstracts away the exact API calls happening under the hood — you can't see what goes into `create()` without reading source. For a portfolio where every decision must be explainable, plain Python makes the architecture transparent. LangGraph deferred to future phases where its graph abstraction adds genuine value (complex conditional flows).
+
+**Groq function calling (tool use), not a parameter extractor**
+An alternative was a simple LLM call: "Extract year and race name from this question". That would only work for the simplest queries. Proper tool calling lets the LLM chain multiple API calls: `get_session → get_stints`, decide whether to use OpenF1 vs Jolpica, and stop when it has enough data. More powerful and a more interesting portfolio piece.
+
+**Two data source separation (OpenF1 vs Jolpica)**
+OpenF1: telemetry (lap times, sector times, pit durations, tyre compounds) — 2023 onwards.
+Jolpica: results and standings (race results, qualifying, championship standings) — all seasons back to 1950.
+The system prompt and tool descriptions are the contract: the LLM reads them at inference time to decide which tools to call. Tool descriptions embed lookup tables (circuit short names, driver numbers) because the LLM's training data may have stale values.
+
+**`_resolve_round()` internal to StructuredRetriever**
+The `get_race_results` and `get_qualifying_results` tools accept a human-readable `race_name` string. Internally, `_resolve_round()` calls `get_schedule()` to resolve it to a round number before the Jolpica fetch. This hides the Ergast round-number convention from the LLM — the tool's interface stays natural.
+
+**Synthetic chunk for structured path**
+`StructuredRetriever.retrieve()` returns a formatted text string. Rather than creating a special path in the generator, the text is wrapped as `{"chunk_id": "structured_data", "text": api_text, "metadata": {"source": "live_api"}}` — the same dict shape the vector store returns. `AnswerGenerator` handles all routes uniformly.
+
+**`2*top_k` candidates for RRF**
+If each retriever only fetches `top_k`, a chunk ranked 6th by BM25 and 7th by vector would be discarded before fusion — even though its combined signal might be the best result. Fetching `2*top_k` gives RRF enough material to find these cross-list winners.
+
+**RRF over score normalisation**
+An alternative is to normalise BM25 scores (0–1) and vector distances (0–1) and add them. Problem: different retrievers produce scores on incompatible scales — a BM25 score of 3.2 vs a cosine distance of 0.4 have no inherent relationship. RRF uses only rank position, which is comparable across any two retrievers regardless of how they score.
+
+**Cross-encoder loaded once at startup**
+Loading `cross-encoder/ms-marco-MiniLM-L-6-v2` takes ~2s and ~90MB RAM. Loading it per request would be unusable. Reranking 5–10 pairs on an already-loaded model takes ~50ms — acceptable for dev.
+
+**`get_qualifying_results` added after discovering the gap**
+"Who won pole?" routes to the structured path, but we had no qualifying tool. The LLM tried to infer pole from `get_lap_times` for individual drivers — inefficient and it guessed wrong driver numbers. Adding `get_qualifying_results` (Jolpica's `/qualifying` endpoint) gives the LLM a direct, single-call path.
+
+### What broke and how it was fixed
+
+**`result.race_name` AttributeError**
+`RaceResultsResponse` field is `raceName` (camelCase, matching Ergast schema). Used `result.race_name` (snake_case). Fixed at call site.
+
+**LLM called `get_session` before Jolpica queries**
+System prompt said "ALWAYS call get_session first". LLM over-applied this to all tools. Fixed: "Call get_session ONLY if you need get_lap_times, get_pit_stops, or get_stints. Do NOT call get_session before Jolpica tools."
+
+**Singapore 404 — wrong circuit_short_name**
+Tool description had `"Marina Bay"`. Actual OpenF1 value is `"Singapore"`. Also: Abu Dhabi = `"Yas Marina Circuit"`, Spain = `"Catalunya"`, Austria = `"Spielberg"`. Fix: query the sessions API to get exact names, embed correct values in tool description.
+
+**Groq `tool_use_failed` (400 error)**
+`llama-3.3-70b-versatile` occasionally generates tool calls in Hermes-style XML format instead of OpenAI-compatible JSON. Groq returns 400. Fixed by wrapping `create()` in `try/except BadRequestError` — retries once. If retry also fails, returns a graceful error string rather than crashing.
+
+**"Who won pole" returned empty**
+LLM tried to infer pole from `get_lap_times` for a single driver (guessed #33, which doesn't exist). Root cause: no qualifying tool existed. Fixed by adding `get_qualifying_results` tool backed by Jolpica's `/qualifying` endpoint.
+
+### Remaining Phase 2 items
+- Prompt versioning (`configs/prompts.yaml`)
+- Structured output + citation enforcement on the generator (Pydantic JSON schema response, decline if zero valid citations)
+
+---
+
+**Original corpus coverage note:**
 166 chunks from 4 press conferences. Specific phrasings and topics not discussed in those transcripts return empty or hallucinated answers. More documents = better coverage. Before Phase 2 testing, consider ingesting 8–10 press conferences across more of the 2024 season.

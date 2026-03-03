@@ -115,6 +115,23 @@ class VectorStore:
         log.info("vector_store.query.done", top_k=top_k, num_hits=len(hits))
         return hits
 
+    def get_all(self) -> list[dict]:
+        """Return every chunk in the collection.
+
+        Used by BM25Retriever to build its keyword index at startup.
+        Returns the same dict shape as query() — chunk_id, text, metadata —
+        but without a distance field (no query was made).
+        """
+        results = self._collection.get(include=["documents", "metadatas"])
+        return [
+            {"chunk_id": cid, "text": text, "metadata": meta}
+            for cid, text, meta in zip(
+                results["ids"],
+                results["documents"],
+                results["metadatas"],
+            )
+        ]
+
     def count(self) -> int:
         """Return total number of chunks currently stored."""
         return self._collection.count()
