@@ -147,3 +147,61 @@ ChromaDB defaults to L2 (Euclidean) distance. Cosine similarity is the correct m
 ### Questions worth thinking about before next session
 - Answer generator: how should citations be structured? chunk_id only, or source + chunk_index?
 - How many retrieved chunks should we pass to the LLM context? (top_k for generation vs retrieval may differ)
+
+---
+
+## Session 4 — 2026-03-03 | Phase 1: Answer Generator + CLI
+
+### What was built
+- `phase-1-fundamentals/generation/generator.py` — `Citation` + `GeneratedAnswer` Pydantic models + `AnswerGenerator` class
+- `phase-1-fundamentals/cli.py` — interactive CLI wiring the full pipeline end to end
+
+### Decisions made and why
+
+**`AnswerGenerator` accepts pre-retrieved chunks, not a `Retriever` instance**
+Phase 2 inserts a reranker between retrieval and generation. If the generator owned retrieval internally, adding the reranker would require modifying the generator. Keeping them separate means Phase 2 just slots in: `retrieve → rerank → generate`. Each component does one thing.
+
+**Prompt stored as a module-level constant, not inside a method**
+Burying the prompt inside `_build_user_message` makes it invisible — you have to read the method to find it. A module-level constant named `SYSTEM_PROMPT` is immediately findable, diffable in git, and clearly separated from logic. Phase 2 will migrate this to `configs/prompts.yaml` for full versioning with before/after metrics.
+
+**Chunks labelled with their actual `chunk_id` in the prompt**
+Each chunk in the prompt is prefixed `[{chunk_id}] source=...`. The LLM cites using those exact labels, and the regex parser looks up the same IDs in `chunk_by_id`. This tight coupling between prompt format and parser is intentional — the two must stay in sync.
+
+**`temperature=0.1`**
+Factual RAG needs the model to stay close to provided context, not be creative. Low temperature reduces the chance the model paraphrases away from the source material or invents plausible-sounding but unjustified claims.
+
+**Token counts logged at `answer_generator.done`**
+`prompt_tokens` and `completion_tokens` are already being captured from the Groq response. Phase 5 will read these structured logs to compute cost-per-query — the logging call sites won't need to change.
+
+**`load_dotenv` before all imports in `cli.py`**
+`GROQ_API_KEY` must be in the environment before `AnswerGenerator.__init__` runs (it checks the key at instantiation). If `load_dotenv` is called after the import, the class is already instantiated with a missing key. Order: load env → import components → instantiate.
+
+**`sys.path.insert` in `cli.py`**
+The CLI lives at the `phase-1-fundamentals/` root. Sibling packages (`embeddings/`, `retrieval/`, `generation/`) are not installed — they're just directories. `sys.path.insert(0, str(Path(__file__).parent))` adds the phase root so Python can find them when the script is run directly.
+
+### What broke and how it was fixed
+
+**Citations all returned empty on first smoke test**
+`answer_generator.unknown_citation` warnings fired for every cited chunk. Root cause: the prompt labelled chunks as `[CHUNK 1]`, `[CHUNK 2]` etc., so the LLM cited those labels. But `_parse_citations` looked up IDs in `chunk_by_id` which uses actual chunk_ids (`c1`, `870e3a25577f`). The labels and the lookup keys were different types — one was a human-readable number, the other the raw DB ID.
+
+Fix: label chunks with their actual `chunk_id` in `_build_user_message`. The prompt now shows `[c1] source=test` and the LLM cites `[c1]`, which the parser resolves correctly. Label format and parser must always be in sync.
+
+### Observation: repeating text in test chunks
+
+Chunks `870e3a25577f` and `f59ac3031799` showed the same sentence repeated multiple times in their text. This is a test data artifact — the source document was a single sentence (much shorter than the 180-word chunk target). When the chunker runs on text shorter than one chunk, the overlap window has nothing new to add, so the same content appears across adjacent chunk boundaries.
+
+This does not happen with real documents. Race reports and press conference transcripts are hundreds to thousands of words — the chunker produces clean, non-overlapping 180-word windows. The overlap (20 words) only exists to preserve sentence context across chunk edges, not to duplicate content.
+
+### Known limitations — to fix in Phase 2
+
+**LLM hallucinated citation IDs**
+When no chunk is relevant, the LLM invents a citation label (e.g. `[no relevant chunk]`, `[No relevant chunk ID available]`) instead of citing nothing. The `answer_generator.unknown_citation` warning catches and discards these, but the answer still goes through. Phase 2 citation enforcement should detect zero valid citations and either reject the answer or flag it with low confidence.
+
+**Citation parser: comma-separated IDs in one bracket**
+The LLM sometimes writes `[id1, id2, id3]` instead of `[id1] [id2] [id3]`. Fixed mid-session by splitting on commas inside each `[...]` match. Fragile — depends on the LLM consistently using commas as separators. Phase 2's structured output (Pydantic JSON schema for LLM response) would eliminate this regex parsing entirely.
+
+**Citation excerpts show chunk headers, not the cited sentence**
+The excerpt in each `Citation` is the first 30 words of the chunk, which is often the race result header (e.g. `"DRIVERS 1 – George Russell..."`) rather than the specific sentence the LLM cited. The excerpt is there to help verify the citation, but it's not pointing at the right part of the chunk. Phase 2 should either increase excerpt length or extract the sentence immediately surrounding the citation in the answer text.
+
+**Corpus coverage gaps**
+166 chunks from 4 press conferences. Specific phrasings and topics not discussed in those transcripts return empty or hallucinated answers. More documents = better coverage. Before Phase 2 testing, consider ingesting 8–10 press conferences across more of the 2024 season.
